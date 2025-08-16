@@ -63,19 +63,8 @@ resource "aws_iam_role_policy" "inline-lambda-policy" {
           "logs:*",
           "glue:*",
           "lakeformation:*",
+          "ram:*",
           "s3:*",
-          
-        ],
-        Resource = "*"
-      },
-
-      {
-        # https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html
-        # Bloqueia a função lambda de executar chamadas de EC2 durante a sua execução.
-        # Estas chamadas são necessárias apenas durante a criação da lambda e a condição abaixo não nega em tempo de criação da função.
-        Sid    = "AllowNetworkInterfaceForMyLambdaOnly",
-        Effect = "Allow",
-        Action = [
           "ec2:CreateNetworkInterface",
           "ec2:DeleteNetworkInterface",
           "ec2:DescribeNetworkInterfaces",
@@ -88,17 +77,44 @@ resource "aws_iam_role_policy" "inline-lambda-policy" {
       },
 
       {
-        Sid    = "DenyLambdaIfNotMyLambda",
+        # https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html
+        # Bloqueia a função lambda de executar chamadas de EC2 durante a sua execução.
+        # Estas chamadas são necessárias apenas durante a criação da lambda e a condição abaixo não nega em tempo de criação da função.
+        Sid    = "AllowNetworkInterfaceForMyLambdaOnly",
         Effect = "Deny",
         Action = [
-          "lambda:*",
-          "glue:*",
-          "lakeformation:*",
+          "ec2:CreateNetworkInterface",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeSubnets",
+          "ec2:DetachNetworkInterface",
+          "ec2:AssignPrivateIpAddresses",
+          "ec2:UnassignPrivateIpAddresses"
         ],
         Resource = "*"
         Condition = {
-          "ArnNotEqualsIfExists" = {
+          "ArnEquals" = {
             "lambda:SourceFunctionArn" = "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
+          }
+        }
+      },
+
+      {
+        Sid    = "DenyLambdaIfNotMyLambda",
+        Effect = "Deny",
+        Action = [
+          "logs:*",
+          "glue:*",
+          "lakeformation:*",
+          "ram:*",
+          "s3:*",
+        ],
+        Resource = "*"
+        Condition = {
+          "ForAnyValue:StringNotEquals" = {
+            "lambda:SourceFunctionArn" = [
+              "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
+            ]
           }
         }
       }
@@ -193,10 +209,10 @@ resource "aws_lambda_function" "lambda_iam_teste" {
   architectures = ["x86_64"]
   timeout       = 300
 
-  vpc_config {
-    security_group_ids = [aws_security_group.lambda_sg.id]
-    subnet_ids         = [aws_subnet.subnet_a.id]
-  }
+  # vpc_config {
+  #   security_group_ids = [aws_security_group.lambda_sg.id]
+  #   subnet_ids         = [aws_subnet.subnet_a.id]
+  # }
 }
 
 
