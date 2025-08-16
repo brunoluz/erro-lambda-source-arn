@@ -21,7 +21,7 @@ resource "aws_vpc" "lambda_vpc" {
   cidr_block           = "10.10.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "vpc-lambda-teste" }
+  tags                 = { Name = "vpc-lambda-teste" }
 }
 
 
@@ -70,16 +70,16 @@ resource "aws_subnet" "subnet_a" {
   cidr_block              = "10.10.1.0/24"
   availability_zone       = data.aws_availability_zones.azs.names[0]
   map_public_ip_on_launch = false
-  tags = { Name = "subnet-a" }
+  tags                    = { Name = "subnet-a" }
 }
 
-resource "aws_subnet" "subnet_b" {
-  vpc_id                  = aws_vpc.lambda_vpc.id
-  cidr_block              = "10.10.2.0/24"
-  availability_zone       = data.aws_availability_zones.azs.names[1]
-  map_public_ip_on_launch = false
-  tags = { Name = "subnet-b" }
-}
+# resource "aws_subnet" "subnet_b" {
+#   vpc_id                  = aws_vpc.lambda_vpc.id
+#   cidr_block              = "10.10.2.0/24"
+#   availability_zone       = data.aws_availability_zones.azs.names[1]
+#   map_public_ip_on_launch = false
+#   tags = { Name = "subnet-b" }
+# }
 
 
 # Security Group para a Lambda (sem ingress; egress liberado)
@@ -98,7 +98,26 @@ resource "aws_security_group" "lambda_sg" {
   tags = { Name = "sg-lambda-teste" }
 }
 
-# Função Lambda usando a role acima
+# resource "aws_lambda_function" "lambda_aaaaa" {
+#   function_name = "lambda_aaaaa"
+#   role          = aws_iam_role.role-iam-teste-2.arn
+#   runtime       = "python3.12"
+#   handler       = "index.lambda_handler"
+
+#   filename         = data.archive_file.lambda_zip.output_path
+#   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+
+#   architectures = ["x86_64"]
+#   timeout       = 3
+# }
+
+resource "null_resource" "always_run" {
+  triggers = {
+    timestamp = "${timestamp()}"
+  }
+}
+
+
 resource "aws_lambda_function" "lambda_iam_teste" {
   function_name = "lambda-iam-teste"
   role          = aws_iam_role.role-iam-teste-2.arn
@@ -113,7 +132,13 @@ resource "aws_lambda_function" "lambda_iam_teste" {
 
   vpc_config {
     security_group_ids = [aws_security_group.lambda_sg.id]
-    subnet_ids         = [aws_subnet.subnet_a.id, aws_subnet.subnet_b.id]
+    subnet_ids         = [aws_subnet.subnet_a.id]
+  }
+
+  lifecycle {
+    replace_triggered_by = [
+      null_resource.always_run
+    ]
   }
 }
 
@@ -126,16 +151,37 @@ resource "aws_iam_role" "role-iam-teste-2" {
     Version = "2012-10-17",
     Statement = [
       {
-        Sid       = "LambdaTrustPolicy",
-        Effect    = "Allow",
-        Principal = { Service = "lambda.amazonaws.com" },
-        Action    = ["sts:AssumeRole", "sts:TagSession"],
+        Sid    = "LambdaTrustPolicy",
+        Effect = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        },
+        Action = [
+          "sts:AssumeRole",
+        "sts:TagSession"],
         Condition = {
           "ArnLike" = {
-            "aws:SourceArn" = "arn:aws:*:*:*:*:*lambda-iam-teste*"
+            "aws:SourceArn" = "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
           }
         }
-      }
+      },
+
+      {
+        Sid    = "EC2NetworkInterfaceTrustPolicy",
+        Effect = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        },
+        Action = [
+          "sts:AssumeRole",
+          "sts:TagSession"
+        ],
+        Condition = {
+          "ArnEqualsIfExists" = {
+            "lambda:SourceFunctionArn" : "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
+          }
+        }
+      },
     ]
   })
 }
