@@ -5,44 +5,26 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
-    archive = {
-      source  = "hashicorp/archive"
-      version = ">= 2.4.0"
-    }
   }
 }
 
 provider "aws" {
-  region = var.aws_region
+  region = "sa-east-1"
 }
 
-variable "aws_region" {
-  description = "Região AWS"
-  type        = string
-  default     = "sa-east-1"
+data "aws_availability_zones" "azs" {
+  state = "available"
 }
 
-# 1) IAM Role com trust apenas para o serviço AWS Lambda
-resource "aws_iam_role" "role-iam-teste-2" {
-  name = "role-iam-teste-2"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid       = "LambdaTrustPolicy",
-        Effect    = "Allow",
-        Principal = { Service = "lambda.amazonaws.com" },
-        Action    = ["sts:AssumeRole", "sts:TagSession"],
-        Condition = {
-          "ArnLikeIfExists" = {
-            "aws:SourceArn" = "arn:aws:*:*:*:*:*lambda-iam-teste*"
-          }
-        }
-      }
-    ]
-  })
+resource "aws_vpc" "lambda_vpc" {
+  cidr_block           = "10.10.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = { Name = "vpc-lambda-teste" }
 }
+
+
 
 # Inline policy permitindo todas as ações de Lambda e EC2
 resource "aws_iam_role_policy" "inline-lambda-policy" {
@@ -55,29 +37,11 @@ resource "aws_iam_role_policy" "inline-lambda-policy" {
       {
         Sid      = "AllowServices",
         Effect   = "Allow",
-        Action   = ["lambda:*", "logs:*"],
+        Action   = ["lambda:*", "logs:*", "ec2:*"],
         Resource = "*"
       }
     ]
   })
-}
-
-
-data "archive_file" "layer_zip" {
-  type        = "zip"
-  output_path = "${path.module}/dummy-layer.zip"
-
-  source {
-    content  = "This is a dummy layer file."
-    filename = "dummy.txt"
-  }
-}
-
-resource "aws_lambda_layer_version" "dummy_layer" {
-  layer_name          = "dummy-layer"
-  filename            = data.archive_file.layer_zip.output_path
-  source_code_hash    = data.archive_file.layer_zip.output_base64sha256
-  compatible_runtimes = ["python3.12"]
 }
 
 
@@ -98,6 +62,42 @@ data "archive_file" "lambda_zip" {
   }
 }
 
+################### AQUI ###################################
+
+# Subnets sem sobreposição
+resource "aws_subnet" "subnet_a" {
+  vpc_id                  = aws_vpc.lambda_vpc.id
+  cidr_block              = "10.10.1.0/24"
+  availability_zone       = data.aws_availability_zones.azs.names[0]
+  map_public_ip_on_launch = false
+  tags = { Name = "subnet-a" }
+}
+
+resource "aws_subnet" "subnet_b" {
+  vpc_id                  = aws_vpc.lambda_vpc.id
+  cidr_block              = "10.10.2.0/24"
+  availability_zone       = data.aws_availability_zones.azs.names[1]
+  map_public_ip_on_launch = false
+  tags = { Name = "subnet-b" }
+}
+
+
+# Security Group para a Lambda (sem ingress; egress liberado)
+resource "aws_security_group" "lambda_sg" {
+  name        = "securitygroupteste"
+  description = "SG da Lambda - sem ingress; egress liberado"
+  vpc_id      = aws_vpc.lambda_vpc.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "sg-lambda-teste" }
+}
+
 # Função Lambda usando a role acima
 resource "aws_lambda_function" "lambda_iam_teste" {
   function_name = "lambda-iam-teste"
@@ -111,13 +111,31 @@ resource "aws_lambda_function" "lambda_iam_teste" {
   architectures = ["x86_64"]
   timeout       = 3
 
-  layers = [aws_lambda_layer_version.dummy_layer.arn]
+  vpc_config {
+    security_group_ids = [aws_security_group.lambda_sg.id]
+    subnet_ids         = [aws_subnet.subnet_a.id, aws_subnet.subnet_b.id]
+  }
 }
 
-output "lambda_name" {
-  value = aws_lambda_function.lambda_iam_teste.function_name
-}
 
-output "role_name" {
-  value = aws_iam_role.role-iam-teste-2.arn
+# 1) IAM Role com trust apenas para o serviço AWS Lambda
+resource "aws_iam_role" "role-iam-teste-2" {
+  name = "role-iam-teste-2"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "LambdaTrustPolicy",
+        Effect    = "Allow",
+        Principal = { Service = "lambda.amazonaws.com" },
+        Action    = ["sts:AssumeRole", "sts:TagSession"],
+        Condition = {
+          "ArnLike" = {
+            "aws:SourceArn" = "arn:aws:*:*:*:*:*lambda-iam-teste*"
+          }
+        }
+      }
+    ]
+  })
 }
