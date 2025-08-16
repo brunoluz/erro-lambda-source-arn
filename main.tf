@@ -65,6 +65,7 @@ resource "aws_iam_role_policy" "inline-lambda-policy" {
           "lakeformation:*",
           "ram:*",
           "s3:*",
+          "cloudshell:*",
           "ec2:CreateNetworkInterface",
           "ec2:DeleteNetworkInterface",
           "ec2:DescribeNetworkInterfaces",
@@ -100,14 +101,16 @@ resource "aws_iam_role_policy" "inline-lambda-policy" {
       },
 
       {
-        Sid    = "DenyLambdaIfNotMyLambda",
+        Sid    = "DenyEverythingExceptNetworkInterfaceIfNotMyLambda",
         Effect = "Deny",
-        Action = [
-          "logs:*",
-          "glue:*",
-          "lakeformation:*",
-          "ram:*",
-          "s3:*",
+        NotAction = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeSubnets",
+          "ec2:DetachNetworkInterface",
+          "ec2:AssignPrivateIpAddresses",
+          "ec2:UnassignPrivateIpAddresses"
         ],
         Resource = "*"
         Condition = {
