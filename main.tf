@@ -12,6 +12,27 @@ provider "aws" {
   region = "sa-east-1"
 }
 
+resource "aws_s3_bucket" "this" {
+  bucket        = "bucket-terraform-teste-iam-lambda-brunoluz"
+  force_destroy = true
+}
+
+resource "aws_glue_catalog_database" "this" {
+  name         = "dbbruno"
+  location_uri = "s3://${aws_s3_bucket.this.bucket}/glue/"
+}
+
+resource "aws_lakeformation_permissions" "db_describe_for_lambda" {
+
+  principal   = aws_iam_role.role-iam-teste-2.arn
+  permissions = ["DESCRIBE"]
+
+  database {
+    name = aws_glue_catalog_database.this.name
+  }
+}
+
+
 data "aws_availability_zones" "azs" {
   state = "available"
 }
@@ -33,14 +54,56 @@ resource "aws_iam_role_policy" "inline-lambda-policy" {
 
   policy = jsonencode({
     Version = "2012-10-17",
+
     Statement = [
       {
-        Sid      = "AllowServices",
-        Effect   = "Allow",
-        Action   = ["lambda:*", "logs:*", "ec2:*"],
+        Sid    = "AllowServices",
+        Effect = "Allow",
+        Action = [
+          "logs:*",
+          "glue:*",
+          "lakeformation:*",
+          "s3:*",
+          
+        ],
         Resource = "*"
+      },
+
+      {
+        # https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html
+        # Bloqueia a função lambda de executar chamadas de EC2 durante a sua execução.
+        # Estas chamadas são necessárias apenas durante a criação da lambda e a condição abaixo não nega em tempo de criação da função.
+        Sid    = "AllowNetworkInterfaceForMyLambdaOnly",
+        Effect = "Allow",
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeSubnets",
+          "ec2:DetachNetworkInterface",
+          "ec2:AssignPrivateIpAddresses",
+          "ec2:UnassignPrivateIpAddresses"
+        ],
+        Resource = "*"
+      },
+
+      {
+        Sid    = "DenyLambdaIfNotMyLambda",
+        Effect = "Deny",
+        Action = [
+          "lambda:*",
+          "glue:*",
+          "lakeformation:*",
+        ],
+        Resource = "*"
+        Condition = {
+          "ArnNotEqualsIfExists" = {
+            "lambda:SourceFunctionArn" = "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
+          }
+        }
       }
     ]
+
   })
 }
 
@@ -54,9 +117,15 @@ data "archive_file" "lambda_zip" {
 
   source {
     content  = <<-PY
-      def lambda_handler(event, context):
-          print("hello world")
-          return {"message": "hello world"}
+import boto3
+
+def lambda_handler(event, context):
+    name = 'dbbruno'
+    client = boto3.client("glue")
+    resp = client.get_database(Name=name)
+    db = resp.get("Database", {})
+
+    return {"message": db.get("Name")}
     PY
     filename = "index.py"
   }
@@ -98,23 +167,17 @@ resource "aws_security_group" "lambda_sg" {
   tags = { Name = "sg-lambda-teste" }
 }
 
-# resource "aws_lambda_function" "lambda_aaaaa" {
-#   function_name = "lambda_aaaaa"
-#   role          = aws_iam_role.role-iam-teste-2.arn
-#   runtime       = "python3.12"
-#   handler       = "index.lambda_handler"
+resource "aws_lambda_function" "lambda_aaaaa" {
+  function_name = "lambda_aaaaa"
+  role          = aws_iam_role.role-iam-teste-2.arn
+  runtime       = "python3.12"
+  handler       = "index.lambda_handler"
 
-#   filename         = data.archive_file.lambda_zip.output_path
-#   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
-#   architectures = ["x86_64"]
-#   timeout       = 3
-# }
-
-resource "null_resource" "always_run" {
-  triggers = {
-    timestamp = "${timestamp()}"
-  }
+  architectures = ["x86_64"]
+  timeout       = 300
 }
 
 
@@ -128,17 +191,11 @@ resource "aws_lambda_function" "lambda_iam_teste" {
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
   architectures = ["x86_64"]
-  timeout       = 3
+  timeout       = 300
 
   vpc_config {
     security_group_ids = [aws_security_group.lambda_sg.id]
     subnet_ids         = [aws_subnet.subnet_a.id]
-  }
-
-  lifecycle {
-    replace_triggered_by = [
-      null_resource.always_run
-    ]
   }
 }
 
@@ -158,30 +215,22 @@ resource "aws_iam_role" "role-iam-teste-2" {
         },
         Action = [
           "sts:AssumeRole",
-        "sts:TagSession"],
-        Condition = {
-          "ArnLike" = {
-            "aws:SourceArn" = "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
-          }
-        }
+          "sts:TagSession"
+        ]
       },
 
       {
-        Sid    = "EC2NetworkInterfaceTrustPolicy",
+        Sid    = "AllowUserBrunoLuzAssume",
         Effect = "Allow",
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        },
         Action = [
-          "sts:AssumeRole",
-          "sts:TagSession"
+          "sts:AssumeRole"
         ],
-        Condition = {
-          "ArnEqualsIfExists" = {
-            "lambda:SourceFunctionArn" : "arn:aws:lambda:sa-east-1:960669553273:function:lambda-iam-teste"
-          }
+
+        Principal = {
+          AWS = "arn:aws:iam::960669553273:user/brunoluz"
         }
-      },
+      }
+
     ]
   })
 }
